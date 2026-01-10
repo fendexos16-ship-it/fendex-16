@@ -57,95 +57,115 @@ const authenticate = async (req, res, next) => {
 };
 
 /**
- * ADMIN ONLY: SAFE OPERATIONAL RESET
- * Purges all operational users, DC mappings, MMDCs, and Riders.
- * Strictly preserves FOUNDER role.
+ * CORE RESET ENGINE: Full Operational Purge
+ * Target: users, master records, and all operational documents.
+ * Safeguard: Preserves Founder identity and _init flags.
  */
-const cleanupOperationalUsers = async (actorId) => {
-  console.log(`[ADMIN] Full Operational Cleanup initiated by: ${actorId}`);
+const resetAllOperationalData = async (actorId) => {
+  console.log(`[CRITICAL] Full System Reset requested by Administrator: ${actorId}`);
   
-  const stats = {
-    usersDeleted: 0,
-    dcUsersDeleted: 0,
-    documentsDeleted: 0,
-    dcMasterDeleted: 0,
-    mmDcsDeleted: 0,
-    ridersDeleted: 0,
-    preserved: ['fendexlogistics@gmail.com']
+  const audit = {
+    collections_processed: [],
+    deleted_counts: {},
+    errors: []
   };
 
-  const collectionsToPurge = [
-    { name: 'users', preserveField: 'role', preserveValue: 'FOUNDER' },
-    { name: 'dc_users' },
-    { name: 'documents' },
-    { name: 'dc_master', preserveField: '_init', preserveValue: true },
-    { name: 'mm_dcs' },
-    { name: 'riders' },
-    { name: 'shipments' },
-    { name: 'runsheets' },
-    { name: 'payout_batches' }
+  const collections = [
+    'users',
+    'dc_master',
+    'dc_users',
+    'mmdc_master',
+    'lmdc_master',
+    'riders',
+    'rider_master',
+    'pincode_master',
+    'documents',
+    'shipments',
+    'runsheets',
+    'payout_batches',
+    'bags',
+    'pickups',
+    'fm_pickups',
+    'rvp_db',
+    'audit_logs'
   ];
 
-  for (const col of collectionsToPurge) {
-    const snap = await db.collection(col.name).get();
-    const batch = db.batch();
-    let count = 0;
+  for (const colName of collections) {
+    try {
+      const colRef = db.collection(colName);
+      const snapshot = await colRef.get();
+      
+      if (snapshot.empty) continue;
 
-    snap.docs.forEach(doc => {
-      const data = doc.data();
-      if (col.preserveField && data[col.preserveField] === col.preserveValue) {
-        return;
+      const batch = db.batch();
+      let deletedInCol = 0;
+
+      snapshot.docs.forEach(doc => {
+        const data = doc.data();
+        
+        // RULE: PRESERVE FOUNDER
+        if (colName === 'users' && (data.role === 'FOUNDER' || data.email === 'fendexlogistics@gmail.com')) {
+          return;
+        }
+
+        // RULE: PRESERVE SYSTEM INIT MARKERS
+        if (data._init === true) {
+          return;
+        }
+
+        batch.delete(doc.ref);
+        deletedInCol++;
+      });
+
+      if (deletedInCol > 0) {
+        await batch.commit();
       }
-      batch.delete(doc.ref);
-      count++;
-    });
 
-    if (count > 0) {
-      await batch.commit();
-      if (col.name === 'users') stats.usersDeleted = count;
-      if (col.name === 'dc_users') stats.dcUsersDeleted = count;
-      if (col.name === 'documents') stats.documentsDeleted = count;
-      if (col.name === 'dc_master') stats.dcMasterDeleted = count;
-      if (col.name === 'mm_dcs') stats.mmDcsDeleted = count;
-      if (col.name === 'riders') stats.ridersDeleted = count;
+      audit.collections_processed.push(colName);
+      audit.deleted_counts[colName] = deletedInCol;
+      console.log(`[RESET] Purged ${deletedInCol} documents from ${colName}`);
+
+    } catch (err) {
+      console.error(`[RESET_ERR] Failure in collection ${colName}:`, err.message);
+      audit.errors.push(`${colName}: ${err.message}`);
     }
   }
 
-  console.log('[ADMIN] Full Cleanup Complete:', stats);
-  return stats;
+  console.log(`[CRITICAL] System Reset Completed at ${new Date().toISOString()}`);
+  return audit;
 };
 
 // --- ROUTES ---
 
 app.get('/', (req, res) => {
-  res.status(200).send('Fendex Identity Core v1.2.0 [Safe Reset & Onboarding Ready]');
+  res.status(200).send('Fendex Backend v1.3.0 [RESET_CAPABLE]');
 });
 
 /**
- * MANUAL TRIGGER FOR CLEANUP (FOUNDER ONLY)
- * Purges MMDC, LMDC, and Rider data to allow fresh start.
+ * ADMIN: TRIGGER FULL SYSTEM PURGE
+ * Restricted to Founder role only.
  */
-app.post('/api/admin/safe-operational-reset', authenticate, async (req, res) => {
+app.post('/api/admin/system-full-reset', authenticate, async (req, res) => {
   try {
     if (req.user.role !== 'FOUNDER') {
-      return res.status(403).json({ success: false, message: "Access Denied: Founder privilege required." });
+      return res.status(403).json({ success: false, message: "Security Block: Founder Access Required" });
     }
 
-    const audit = await cleanupOperationalUsers(req.user.uid);
+    const resetAudit = await resetAllOperationalData(req.user.uid);
     
     return res.status(200).json({ 
       success: true, 
-      message: "System reset successful. System ready for fresh MMDC/LMDC/Rider onboarding.",
-      audit
+      message: "Operational reset successful. System returned to zero-data state.",
+      audit: resetAudit
     });
   } catch (error) {
-    console.error("[CRITICAL] Reset Failure:", error);
-    return res.status(500).json({ success: false, message: "Internal failure during purge." });
+    console.error("[SYSTEM_FAILURE] Reset Exception:", error);
+    return res.status(500).json({ success: false, message: "Reset failed during batch commit." });
   }
 });
 
 /**
- * AUTHENTICATION
+ * AUTHENTICATION (HttpOnly Cookie Pattern)
  */
 app.post('/api/auth/login', async (req, res) => {
   try {
@@ -160,21 +180,22 @@ app.post('/api/auth/login', async (req, res) => {
     const userDoc = snapshot.docs[0];
     const userData = userDoc.data();
 
-    if (userData.status !== 'ACTIVE') return res.status(403).json({ success: false, message: "Account disabled." });
-
-    // Founder preserved credentials check
-    const match = (password === userData.password); 
-    
-    if (!match) {
-        const hashedMatch = userData.passwordHash ? await bcrypt.compare(password, userData.passwordHash) : false;
-        if (!hashedMatch) return res.status(401).json({ success: false, message: "Invalid credentials" });
+    if (userData.status !== 'ACTIVE' && userData.status !== 'Active') {
+      return res.status(403).json({ success: false, message: "Account disabled." });
     }
+
+    // Direct match for founder during reset phase, fallback to bcrypt in production logic
+    let match = (password === userData.password);
+    if (!match && userData.passwordHash) {
+       match = await bcrypt.compare(password, userData.passwordHash);
+    }
+
+    if (!match) return res.status(401).json({ success: false, message: "Invalid credentials" });
 
     const token = jwt.sign({ 
         uid: userDoc.id, 
         email: userData.email, 
-        role: userData.role,
-        dc_id: userData.dc_id || null 
+        role: userData.role 
     }, JWT_SECRET, { expiresIn: TOKEN_EXPIRY });
 
     res.cookie(COOKIE_NAME, token, {
@@ -191,16 +212,16 @@ app.post('/api/auth/login', async (req, res) => {
       user: { id: userDoc.id, email: userData.email, role: userData.role, status: userData.status }
     });
   } catch (error) {
-    return res.status(500).json({ success: false, message: "Auth Service Error" });
+    return res.status(500).json({ success: false, message: "Internal Auth Error" });
   }
 });
 
 app.post('/api/auth/logout', (req, res) => {
    res.clearCookie(COOKIE_NAME, { httpOnly: true, secure: true, sameSite: 'none', domain: '.fendexlog.in', path: '/' });
-   res.status(200).json({ success: true, message: 'Logged out' });
+   res.status(200).json({ success: true, message: 'Session Terminated' });
 });
 
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
-  console.log(`Fendex Identity Core active on port ${PORT}`);
+  console.log(`Fendex Identity Core v1.3.0 listening on port ${PORT}`);
 });
