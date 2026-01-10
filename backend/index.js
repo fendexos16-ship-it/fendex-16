@@ -57,71 +57,90 @@ const authenticate = async (req, res, next) => {
 };
 
 /**
- * ADMIN ONLY: SYSTEM RESET
- * Cleans all operational data, preserves Founder.
- * Strictly manual invocation.
+ * ADMIN ONLY: SAFE OPERATIONAL RESET
+ * Purges all operational users, DC mappings, MMDCs, and Riders.
+ * Strictly preserves FOUNDER role.
  */
-const performSystemReset = async (actorId) => {
-  console.log(`[ADMIN] System Reset initiated by: ${actorId}`);
+const cleanupOperationalUsers = async (actorId) => {
+  console.log(`[ADMIN] Full Operational Cleanup initiated by: ${actorId}`);
   
-  const collections = ['dc_master', 'dc_users', 'documents', 'riders', 'users'];
-  const stats = { deleted: {}, preserved: 0 };
+  const stats = {
+    usersDeleted: 0,
+    dcUsersDeleted: 0,
+    documentsDeleted: 0,
+    dcMasterDeleted: 0,
+    mmDcsDeleted: 0,
+    ridersDeleted: 0,
+    preserved: ['fendexlogistics@gmail.com']
+  };
 
-  for (const colName of collections) {
-    const snap = await db.collection(colName).get();
-    let colDeleted = 0;
-    
+  const collectionsToPurge = [
+    { name: 'users', preserveField: 'role', preserveValue: 'FOUNDER' },
+    { name: 'dc_users' },
+    { name: 'documents' },
+    { name: 'dc_master', preserveField: '_init', preserveValue: true },
+    { name: 'mm_dcs' },
+    { name: 'riders' },
+    { name: 'shipments' },
+    { name: 'runsheets' },
+    { name: 'payout_batches' }
+  ];
+
+  for (const col of collectionsToPurge) {
+    const snap = await db.collection(col.name).get();
     const batch = db.batch();
-    
+    let count = 0;
+
     snap.docs.forEach(doc => {
       const data = doc.data();
-      
-      // PRESERVATION RULES
-      if (colName === 'users' && data.role === 'FOUNDER') {
-        stats.preserved++;
+      if (col.preserveField && data[col.preserveField] === col.preserveValue) {
         return;
       }
-      if (data._init === true) {
-        return; 
-      }
-
       batch.delete(doc.ref);
-      colDeleted++;
+      count++;
     });
 
-    await batch.commit();
-    stats.deleted[colName] = colDeleted;
+    if (count > 0) {
+      await batch.commit();
+      if (col.name === 'users') stats.usersDeleted = count;
+      if (col.name === 'dc_users') stats.dcUsersDeleted = count;
+      if (col.name === 'documents') stats.documentsDeleted = count;
+      if (col.name === 'dc_master') stats.dcMasterDeleted = count;
+      if (col.name === 'mm_dcs') stats.mmDcsDeleted = count;
+      if (col.name === 'riders') stats.ridersDeleted = count;
+    }
   }
 
-  console.log('[ADMIN] Reset Complete:', stats);
+  console.log('[ADMIN] Full Cleanup Complete:', stats);
   return stats;
 };
 
 // --- ROUTES ---
 
 app.get('/', (req, res) => {
-  res.status(200).send('Fendex Identity Core v1.1.0 [Operational Reset Ready]');
+  res.status(200).send('Fendex Identity Core v1.2.0 [Safe Reset & Onboarding Ready]');
 });
 
 /**
- * MANUAL RESET ENDPOINT (FOUNDER ONLY)
+ * MANUAL TRIGGER FOR CLEANUP (FOUNDER ONLY)
+ * Purges MMDC, LMDC, and Rider data to allow fresh start.
  */
-app.post('/api/admin/system-purge-reset', authenticate, async (req, res) => {
+app.post('/api/admin/safe-operational-reset', authenticate, async (req, res) => {
   try {
     if (req.user.role !== 'FOUNDER') {
-      return res.status(403).json({ success: false, message: "Access Denied: Founder Only" });
+      return res.status(403).json({ success: false, message: "Access Denied: Founder privilege required." });
     }
 
-    const stats = await performSystemReset(req.user.uid);
+    const audit = await cleanupOperationalUsers(req.user.uid);
     
     return res.status(200).json({ 
       success: true, 
-      message: "Operational data purged. System ready for fresh onboarding.",
-      audit: stats
+      message: "System reset successful. System ready for fresh MMDC/LMDC/Rider onboarding.",
+      audit
     });
   } catch (error) {
-    console.error("[CRITICAL_ERR] Reset Failure:", error);
-    return res.status(500).json({ success: false, message: "Reset failed during execution." });
+    console.error("[CRITICAL] Reset Failure:", error);
+    return res.status(500).json({ success: false, message: "Internal failure during purge." });
   }
 });
 
@@ -143,13 +162,10 @@ app.post('/api/auth/login', async (req, res) => {
 
     if (userData.status !== 'ACTIVE') return res.status(403).json({ success: false, message: "Account disabled." });
 
-    // Note: Since we are in reset mode, passwords for demo/test accounts are gone.
-    // Founder password Nithya1996@@ is maintained in Firestore.
-    // In production, bcrypt.compare is used.
-    const match = (password === userData.password); // Placeholder for standardized reset creds if needed, though Founder is preserved
+    // Founder preserved credentials check
+    const match = (password === userData.password); 
     
     if (!match) {
-        // Fallback for bcrypt if already hashed in DB
         const hashedMatch = userData.passwordHash ? await bcrypt.compare(password, userData.passwordHash) : false;
         if (!hashedMatch) return res.status(401).json({ success: false, message: "Invalid credentials" });
     }
