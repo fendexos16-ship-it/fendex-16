@@ -1,0 +1,20 @@
+{
+  "name": "Fendex Logistics -16 final",
+  "description": "Fendex Logistics Enterprise System. \n\nSTATUS: PRODUCTION_ACTIVE\nDB_SCHEMA: LOCKED (v1.0.0)\nVERIFIED: ROLE_LOCK, CAPACITY_LOCK, COD_SECURE, AUDIT_IMMUTABLE, DB_TRIGGERS_ACTIVE, BRANDING_LOCKED.\n\nWARNING: LIVE FINANCIAL DATA. UNAUTHORIZED ACCESS PROHIBITED.\n\nVERSION_TAG: FENDEX_OS_v1.0.1_PRODUCTION",
+  "version": "FENDEX_OS_v1.0.1_PRODUCTION",
+  "systemStatus": "PRODUCTION_HARD_FREEZE",
+  "brandingStatus": "LOCKED",
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "type": "image/png",
+      "sizes": "192x192"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "type": "image/png",
+      "sizes": "512x512"
+    }
+  ],
+  "requestFramePermissions": []
+}
